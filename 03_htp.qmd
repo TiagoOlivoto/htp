@@ -1,0 +1,66 @@
+---
+title: "Scripts - 19/10"
+---
+
+# Pacotes e Diretório
+
+
+```{r}
+library(pliman)
+set_wd_here("htp")
+```
+
+# Índices multiespectrais
+
+https://tiagoolivoto.github.io/pliman/articles/indexes.html
+
+```{r}
+shp <- shapefile_input("shapefile_dsm.rds")
+ortho <- mosaic_input("ortho.tif")
+bm <- mosaic_view(ortho,
+                  r = 1, g = 2, b = 3)
+
+# Ver a área que não está correta
+
+res <- 
+  mosaic_analyze(ortho, 
+                 r = 1, g = 2, b = 3,
+                 basemap = bm,
+                 shapefile = shp,
+                 plot_index = c("NGRDI", "GLI"),
+                 threshold = 0.05,
+                 segment_plot = TRUE)
+
+bm + shapefile_view(res$result_plot, attribute = "mean.NGRDI")
+bm + shapefile_view(res$result_plot, attribute = "coverage")
+```
+
+
+
+
+# Altura de planta
+```{r}
+bm <- mosaic_view(ortho,
+                  r = 1, g = 2, b = 3,
+                  max_pixels = 4e6)
+
+dsm <- mosaic_input("dsm_soy.tif")
+dtm <-  mosaic_input("dtm_soy.tif")
+shp <- shapefile_input("shapefile_dsm.rds")
+
+# Tendo o DTM
+resap <- mosaic_chm(dsm, dtm)
+
+# Interpolar o DTM usando o DSM 
+resap <- mosaic_chm(dsm)
+
+
+# Extrair os valores
+altplant <- mosaic_chm_extract(resap, 
+                               shapefile = shp)
+bm + shapefile_view(altplant, attribute = "volume")
+
+```
+
+
+

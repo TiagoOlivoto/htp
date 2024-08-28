@@ -1,0 +1,228 @@
+# Fitopatometria
+
+## Usando paletas de cores
+
+As paletas de cores podem ser feitas simplesmente amostrando manualmente pequenas áreas de imagens representativas e produzindo uma imagem composta que representará cada uma das classes desejadas (fundo, tecido saudável e tecido sintomático). A imagem a seguir[^4] mostra sintomas de antracnose (*Elsinoë ampelina*) em folhas de uva.
+
+[^4]: Fonte: <http://gazeta-rs.com.br/as-principais-doencas-da-videira-na-primavera/#prettyPhoto>
+
+```{r}
+img <- image_import("videira.png", plot = TRUE)
+sev <-  measure_disease_iter(img = img, viewer = "mapview")
+sev$severity
+```
+
+
+## Usando índices de imagens
+
+```{r}
+sev2 <-
+  measure_disease(img,
+                  index_lb = "G",
+                  index_dh = "NGRDI",
+                  threshold = c("Otsu", 0.1))
+sev2$severity
+```
+
+```{r}
+sev2 <-
+  measure_disease(img,
+                  index_lb = "G",
+                  index_dh = "NGRDI",
+                  threshold = c("Otsu", 0.1),
+                  show_original = FALSE,
+                  show_features = TRUE,
+                  save_image = TRUE,
+                  # show_segmentation = TRUE,
+                  watershed = TRUE)
+sev2$severity
+```
+
+
+## Processamento em lote
+Para analisar diversas imagens de um diretório, use o argumento `pattern` para declarar um padrão de nomes de arquivos. Aqui serão utilizadas 50 folhas de soja disponíveis no repositório https://osf.io/4hbr6, banco de imagens de anotação de severidade de doenças de plantas. Obrigado a [Emerson M. Del Ponte](https://osf.io/jb6yd/) e seus colaboradores por manter este projeto disponível publicamente. Usando o argumento `save_image = TRUE` salvamos as imagens processadas em um diretório temporário, definido por `tempdir()`.
+
+```{r}
+# criar um diretório temporário
+
+sev_lote <- 
+  measure_disease(pattern = "soy",
+                  dir_original = "sevsoja",
+                  dir_processed = "sevproc",
+                  index_lb = "B",
+                  index_dh = "NGRDI",
+                  threshold = c("Otsu", -0.03),
+                  plot =  FALSE,
+                  save_image = TRUE,
+                  show_contour = FALSE,
+                  col_lesions = "brown",
+                  parallel = TRUE,
+                  verbose = FALSE)
+
+sev_lote$severity |> 
+  ggplot(aes(x = symptomatic)) +
+  geom_histogram(bins = 8)
+```
+
+## Diagramas de área padrão
+
+Os diagramas de área padrão (SAD) têm sido usados há muito tempo como uma ferramenta para auxiliar na estimativa da severidade de doenças em plantas, servindo como um modelo de referência padrão antes ou durante as avaliações. Dado um objeto calculado com `measure_disease()` um Diagrama de Área Padrão (SAD) com `n` imagens contendo os respectivos valores de severidade são obtidos com `sad()`.
+
+O SAD só pode ser calculado se um nome de padrão de imagem for usado no argumento `pattern` de `measure_disease()`. Se as imagens forem salvas, as `n` imagens serão recuperadas do diretório `dir_processed`. Caso contrário, a severidade será computada novamente para gerar as imagens. Um SAD com 9 imagens do exemplo acima pode ser obtido facilmente com:
+
+```{r}
+sad(sev_lote, n = 9, ncol = 3)
+```
+
+
+## Várias folhas em uma imagem
+
+
+Quando múltiplas folhas estão presentes em uma imagem, a função `measure_disease` retorna a gravidade média das folhas presentes na imagem. Para quantificar a gravidade *por folha*, a função `measure_disease_byl()` pode ser usada.
+
+Esta função calcula a porcentagem da área foliar sintomática usando paletas de cores ou índices RGB para cada folha (`byl`) de uma imagem. Isto permite, por exemplo, processar réplicas do mesmo tratamento e obter os resultados de cada réplica com uma única imagem. 
+
+No seguinte exemplo, são processadas imagens de folhas de laranja, gentilmente cedidas por [Gabriele de Jesus](https://www.linkedin.com/in/gabriele-lima-de-jesus-a67805230/?utm_source=share&utm_campaign=share_via&utm_content=profile&utm_medium=ios_app)
+
+```{r}
+img <- image_import("sev_leaves.jpg", plot = TRUE)
+# folha <- pick_palette(img, viewer = "mapview")
+# doenca <- pick_palette(img, viewer = "mapview")
+sev <- 
+  measure_disease_byl(img,
+                      index = "B",
+                      index_lb = "B",
+                      index_dh = "NGRDI",
+                      save_image = TRUE)
+
+sev$severity
+```
+
+## Curvas dose-resposta
+O script fornecido trata da análise de dados de um experimento de dose-resposta para avaliar a eficácia de diferentes produtos na redução da severidade de uma doença em plantas. O uso das imagens é feito com a autorização da SUMITOMO-SA.
+
+
+O primeiro passo é quantificar a severidade dentro de cada placa de petri, que representa uma dose de um determinado produto. Posteriormente, para ajustar as curvas dA análise é realizada usando a biblioteca drda no R, que é uma ferramenta para análise de dados de dose-resposta. 
+
+O script ajusta modelos de regressão não linear para os dados de dose-resposta utilizando a função `drda()` para cada produto. O modelo especificado é uma regressão log-logística de 4 parâmetros ("ll4"). 
+
+```{r}
+
+# DOSE-RESPOSTA
+library(drda)
+set_wd_here("dose_resposta")
+
+# Computar a severidade por folha
+sev <-
+  measure_disease_byl(pattern = "img",
+                      index = "B",
+                      index_dh = "NGRDI",
+                      parallel = TRUE,
+                      opening = c(25, 0))
+sev_ <-
+  sev$severity |>
+  separate(img, into = c("img", "produto", "dose"), sep = "_") |>
+  mutate(dose = as.numeric(str_replace_all(dose, ",", ".")),
+         symptomatic = symptomatic / 100)
+
+
+
+models <- 
+  sev_ |> 
+  group_by(produto) |> 
+  nest() |> 
+  mutate(models = map(data, 
+                      ~drda(symptomatic ~ dose,
+                            data = .,
+                            mean_function = "ll4"))) |> # definir o modelo aqui
+  dplyr::select(-data)
+
+# função para obter os coeficientes
+get_results <- function(model,
+                        resplevel = 0.5,
+                        type = "relative"){
+  coefs <- coef(model) |> t()
+  ed <- effective_dose(model, y = resplevel) |> as.data.frame()
+  integ <- data.frame(nauc = nauc(model, range(model$model[[2]])))
+  cbind(coefs, ed, integ)
+}
+
+# Obter os coeficientes
+# alpha:  the value of the function at x = 0
+# delta: height of the curve
+# eta: the steepness (growth rate) of the curve
+# phi: the x value at which the curve is equal to its mid-point
+
+coefs <- 
+  models |> 
+  mutate(coefs = map_dfr(
+    .x = models,
+    .f = ~get_results(., resplevel = 0.5)) # DL50
+  ) |> 
+  dplyr::select(-models) |> 
+  unnest(coefs) |> 
+  ungroup() |> 
+  as.data.frame()
+coefs
+
+
+plot(models$models[[1]], models$models[[2]],
+     level = 0,
+     base = "10",
+     ylim = c(0, 0.5),
+     xlim = c(0, 100),
+     legend = c("P1", "P2"),
+     xlab = "Dose (ppm)",
+     ylab = "Severidade da doença",
+     col = metan::ggplot_color(2),
+     cex = 2)
+
+models
+
+# derivada em relação a dose do modelo
+D(expression(alpha + delta * x^eta / (x^eta + phi^eta)), "x")
+
+dy <- function(x,alpha,  delta,   eta,   phi){
+  delta * (x^(eta - 1) * eta)/(x^eta + phi^eta) - delta * x^eta * 
+    (x^(eta - 1) * eta)/(x^eta + phi^eta)^2
+}
+
+# Primeira derivada
+ggplot(data.frame(x = c(0, 5)), aes(x = x)) +
+  pmap(coefs |> select(produto:phi), function(produto, alpha, delta, eta, phi) {
+    stat_function(fun = function(x) dy(x, alpha, delta, eta, phi),
+                  aes(color = produto),
+                  linewidth = 1)
+  }) + 
+  geom_vline(aes(xintercept = phi,
+                 color = produto),
+             data = coefs,
+             linetype = 2) +
+  labs(x = "Dose (ppm)",
+       y = "Taxa de redução da severidade (% por ppm)",
+       color = "Produto") +
+  ggthemes::theme_base()
+
+
+```
+
+
+
+## Fungos em placas de petri
+```{r}
+# fungo em placa de petri
+set_wd_here()
+fungo <- image_import("fungo.jpeg", plot = TRUE)
+
+analyze_objects(fungo,
+                index = "HUE",
+                filter = 5,
+                watershed = FALSE,
+                invert = TRUE) |> 
+  get_measures(dpi = 90) |> 
+  plot_measures(measure = "area", 
+                col = "black",
+                size = 2)
+
+```
+

@@ -1,0 +1,347 @@
+# Pacotes e diretório
+
+```{r}
+library(pliman)
+library(tidyverse)
+library(ggridges)
+set_wd_here("imgs")
+```
+
+
+# Contagem e medidas de objetos
+
+A função `analyze_objects()` é a função-chave no pliman para calcular uma gama de medidas que podem ser usadas para estudar a forma e a textura de objetos, como folhas. No exemplo a seguir, mostro como plotar o comprimento e a largura de cada folha na imagem a seguir.
+
+```{r}
+#| out-width: "100%"
+leaves <- image_import("flax.jpg", plot = TRUE)
+
+image_index(leaves)
+
+leaves_meas <-
+  analyze_objects(leaves,
+                  show_lw = TRUE,
+                  index = "B")
+
+# plot width and length
+image_view(leaves, object = leaves_meas)
+```
+
+# Correção de medidas
+
+## Resolução conhecida
+
+```{r}
+dpi(leaves, viewer = "mapview")
+corrected <- get_measures(leaves_meas, dpi = 300)
+str(corrected)
+```
+
+## Objeto de referência (cor)
+
+O argumento `reference` agora pode ser usado para corrigir as medidas dos objetos mesmo quando são utilizadas imagens com diferentes distâncias de captura. Isso difere do exemplo anterior em um aspecto sutil, mas crucial: quando a `reference` é informada, o processamento em lote pode ser utilizado! Neste exemplo, a área foliar da imagem `leaves` é quantificada e corrigida considerando um retângulo de 4 x 5 (20 cm$^2$) como objeto de referência. Quando `reference = TRUE` for informado em `analyze_objects()` a função realizará um processo de segmentação de objetos em duas etapas:
+
+O primeiro passo consiste em segmentar o primeiro plano (folhas e objeto de referência) do fundo. Para isso, um índice de imagem é utilizado e pode ser declarado no argumento `back_fore_index`. O padrão (`back_fore_index = "R/(G/B)"`) é otimizado para segmentar fundos brancos de folhas verdes e um objeto de referência azul. Vamos ver o desempenho desse índice neste exemplo.
+
+```{r}
+ind <- image_index(leaves, index = "R/(G/B)", plot =  FALSE)[[1]]
+bin <- image_binary(leaves, index = "R/(G/B)", plot =  FALSE)[[1]]
+image_combine(ind, bin)
+# Segmentando a imagem
+seg1 <- image_segment(leaves, index = "R/(G/B)")
+```
+
+Bom trabalho! agora, removemos o fundo. A próxima etapa é segmentar os objetos e o modelo de referência. Basicamente precisamos repetir o passo anterior isolando a referência.
+
+```{r}
+image_segment(seg1, "B-R")
+seg2 <- 
+  image_binary(seg1,
+               index = "B-R")
+# number of pixels in the reference object
+length(which(seg2$`B-R` != 1))
+
+```
+
+Agora que sabemos os índices a serem utilizados para cada segmentação, podemos utilizar a função `analyze_objects` para obter as medidas corrigidas com base no objeto de referência.
+
+```{r}
+res1 <- 
+  analyze_objects(leaves, 
+                  reference = TRUE,
+                  reference_area = 20,
+                  back_fore_index = "R/(G/B)", # padrão
+                  fore_ref_index = "B-R",      # padrão
+                  marker = "area")
+
+```
+
+## Objeto de referência (tamanho)
+
+Uma segunda opção para correção das medidas é utilizar um objeto de referência com tamanho menor ou maior de todos os objetos na imagem. Quando for o caso, os argumentos `reference_larger` e `reference_smaller` podem ser utilizados para indicar quando o objeto maior/menor na imagem deve ser usado como objeto de referência. Isto só é válido quando `reference` está definido como `TRUE` e `reference_area` indica a área do objeto de referência. **IMPORTANTE**. Quando `reference_smaller` é usado, objetos com área menor que 1% da média de todos os objetos são ignorados. Isso é usado para remover possíveis ruídos na imagem, como poeira. Portanto, certifique-se de que o objeto de referência possua uma área que não será removida por esse ponto de corte.
+
+```{r}
+
+flaxref <- image_import("flax_ref.jpg", plot = TRUE)
+res2 <- 
+  analyze_objects(flaxref,
+                  index = "GRAY",
+                  reference = TRUE,
+                  reference_area = 6,
+                  reference_larger = TRUE,
+                  show_contour = FALSE,
+                  marker = "point")
+image_view(flaxref, object = res2)
+
+
+# alguns parametros úteis
+#  (top N maiores objetos)
+analyze_objects(flaxref,
+                index = "GRAY",
+                reference = TRUE,
+                reference_area = 6,
+                reference_larger = TRUE,
+                show_contour = FALSE,
+                topn_upper = 5,
+                marker = "point")
+
+# controle do ruído
+analyze_objects(flaxref,
+                index = "GRAY",
+                reference = TRUE,
+                reference_area = 6,
+                reference_larger = TRUE,
+                show_contour = FALSE,
+                lower_noise = 0.25,
+                marker = "point")
+```
+
+
+# Processamento em lote
+
+Na análise de imagens, muitas vezes é necessário processar mais de uma imagem. No `pliman`, o processamento em lote pode ser feito quando o usuário declara o argumento `pattern`. Ele deve indicar padrão de nome de arquivo usado para identificar imagens a serem importadas. Por exemplo, se pattern = `"im"` todas as imagens no diretório de trabalho atual cujo nome corresponda ao padrão (por exemplo, `img1`, `image1`, `im2`) serão processadas. Fornecer qualquer número como padrão (por exemplo, padrão = `"1"`) selecionará imagens que contém algum número em seu nome. Um erro será retornado se o padrão corresponder a qualquer arquivo não suportado (por exemplo, `img1.pdf`).
+
+Se os usuários precisarem analisar várias imagens da mesma amostra, as imagens deverão compartilhar o mesmo prefixo de nome de arquivo, que é definido como a parte do nome do arquivo que precede o primeiro hífen (`-`) ou underscore (`_`). Então, ao usar `get_measures()`, medições de imagens de folhas chamadas, por exemplo, `F1-1.jpeg`, `F1-2.jpeg` e `F1-3.jpeg` serão combinadas em uma única imagem (`F1`), exibido no objeto `merge`. Isto é útil, por exemplo, para analisar folhas grandes que precisam ser divididas em múltiplas imagens ou múltiplas folhas pertencentes à mesma amostra que não podem ser digitalizadas em uma única imagem.
+
+No exemplo a seguir, 36 imagens serão analisadas. Essas imagens estão na pasta 'linhaca' e contêm folhas de linho de 12 datas de avaliação, com três repetições[^1]. Observe que para garantir que todas as imagens sejam processadas, todas as imagens devem compartilhar um padrão comum, neste caso (`"A"`). Aqui, usarei `pattern = "A"` para indicar que todas as imagens com este nome de padrão devem ser mescladas.
+
+[^1]: As imagens são provenientes de experimento de avaliação de cultivares de linho na Universidade Federal de Santa Catarina - UFSC
+
+```{r}
+res2 <-
+  analyze_objects(pattern = "Grãos",
+                  index = "GRAY",
+                  dir_original = "contagem",
+                  reference = TRUE,
+                  reference_area = 6,
+                  reference_larger = TRUE,
+                  # lower_noise = 0.25,
+                  save_image = TRUE,
+                  dir_processed = "proc_contagem",
+                  show_contour = FALSE,
+                  marker = "point",
+                  plot = FALSE)
+
+merged <- get_measures(res2)
+
+```
+
+Observe que `merged` é uma lista com três objetos:
+
+-   `resultados`: um data.frame que contém as medidas de cada objeto individual (neste caso, uma folha individual) de cada imagem analisada.
+
+```{r mescla3}
+glimpse(merged$results)
+```
+
+-   `summary`: um data.frame que contém o resumo dos resultados, contendo o número de objetos em cada imagem (`n`), a soma, a média e o desvio padrão da área de cada imagem, bem como o valor médio para todas as outras medidas (perímetro, raio, etc.)
+
+```{r mescla4}
+glimpse(merged$summary)
+
+```
+
+-   `merge`: um data.frame que contém os resultados mesclados por prefixo de imagem (neste caso, A1 a A12).
+
+```{r mescla5}
+glimpse(merged$merge)
+
+```
+
+# Perfil espectral dos objetos
+
+Para obter a intensidade RGB/HSV de cada objeto na imagem, usamos o argumento `object_rgb = TRUE` na função `analyze_objects()`. No exemplo a seguir utilizaremos as bandas R, G e B e seus valores normalizados. A função `pliman_indexes()` retorna os índices disponíveis no pacote. Para calcular um índice específico, basta inserir uma fórmula contendo os valores de R, G ou B (por exemplo, `object_index = "B/G+R"`).
+
+```{r rgb2}
+img <- image_import("flax.jpg", plot = TRUE)
+(indx <- pliman_indexes_rgb())
+
+flax_leaves <-
+  analyze_objects(img ,
+                  index = "B",
+                  opening = 3,
+                  tolerance = 3,
+                  object_index = c(indx, "DGCI"),
+                  pixel_level_index = TRUE, # permite a análise a nível de pixel
+                  marker = "point",
+                  col_background = "white",
+                  show_contour = TRUE)
+
+
+```
+
+Agora, vamos plotar o `DGCI` (Índice de Cor Verde Escuro) em cada objeto. O DGCI é baseado na cor espacial HSB (Matiz, Saturação e Brilho) e tem sido usado como um indicador da tonalidade de verde [^2]
+
+[^2]: Karcher, D.E., and M.D. Richardson. 2003. Quantifying Turfgrass Color Using Digital Image Analysis. Crop Science 43(3): 943--951. doi: 10.2135/cropsci2003.9430
+
+```{r}
+image_view(img, 
+           object = flax_leaves,
+           attribute = "DGCI")
+```
+
+
+Parece que folhas com valor médio de DGCI inferior a 0,4 podem ser consideradas folhas "amareladas". Os usuários podem então trabalhar com esse recurso e adaptá-lo ao seu caso.
+
+```{r rgb4}
+undebug(summary_index)
+report <-
+  summary_index(flax_leaves ,
+                index = "DGCI",
+                cut_point = 0.45,
+                plot = FALSE)
+ids <- report$ids
+report$between_id
+report$within_id[report$within_id$id %in% ids,]
+
+```
+
+No gráfico a seguir, ploto a distribuição dos valores de H, S e B para as folhas "Amareladas" e "Esverdeadas".
+
+```{r}
+
+rgbs <-
+  flax_leaves$object_rgb |>
+  select(id, h, s, b) |> 
+  mutate(type = ifelse(id %in% ids, "Amarelada", "Verde")) |>
+  select(-id) |>
+  pivot_longer(-type)
+
+ggplot(rgbs, aes(x = value, y= name, fill = type)) +
+  geom_density_ridges(alpha = 0.5,
+                      panel_scaling = FALSE) +
+  scale_fill_manual(values = c( "yellow", "darkgreen")) +
+  labs(x = "Valor",
+       y = "Banda") +
+  theme_minimal()
+
+
+```
+
+
+
+## Contagem e viabilidade de pólem
+
+Imagem disponível [nesta discussão](https://forum.image.sc/t/pollen-counting-approach-small-unidentifiable-objects-in-counting-included/63040)
+
+```{r}
+
+img <- image_import("polem.jpg", plot = TRUE)
+res <-
+  analyze_objects(img,
+                  filter = 2,
+                  tolerance = 0.5,
+                  lower_noise = 0.3,
+                  show_contour = FALSE,
+                  index = "L*")
+size <- res$results
+ids <- size[size$area > 580, ]
+ids2 <- size[size$area <= 580, ]
+points(ids$x, ids$y, pch = 16)
+points(ids2$x, ids2$y, pch = 16, col = "yellow")
+
+legend("top",
+       c("Viável", "Não viável"),
+       pch = 16,
+       ncol = 2,
+       col = c("black", "yellow"))
+prop <- nrow(ids) / (nrow(ids) + nrow(ids2)) * 100
+text(1020, -100,
+     labels = paste0("Número:", res$statistics$value[1]))
+text(1100, -60,
+     labels = paste0("Pólem viável: ", round(prop, 3), "%"))
+```
+
+
+
+## Área e forma foliar
+
+As funções disponíveis para análise de contornos utilizando Descritores Ellipticos Fourier foram adaptadas Claude (2088)[^3]
+
+[^3]: Claude, J. 2008. Morphometrics with R \< https://link.springer.com/book/10.1007/978-0-387-77789-4
+
+O seguinte exemplo mostra como extrair descritores fourier de folhas de batata-doce, oriundas de um experimento conduzido pelo grupo NEOSC, na UFSC.
+
+```{r}
+img <- image_import("potato.jpg") 
+
+# Contornos
+cont <- object_contour(img,
+                       index = "R",
+                       plot = FALSE,
+                       watershed = FALSE)
+# retirar a referência
+plot_polygon(cont)
+cont <- cont[-which(names(cont) == "5")]
+plot_polygon(cont)
+
+# Computar os descritores Fourier
+fourier <- efourier(cont, nharm = 30)
+fourier_inv5 <- efourier_inv(fourier, nharm = 5)
+fourier_inv10 <- efourier_inv(fourier, nharm = 10)
+fourier_inv20 <- efourier_inv(fourier, nharm = 20)
+
+# Plotar o contorno estimado com diferentes harmônicas
+plot(img)
+plot_contour(cont, col = "red", lwd = 1)
+plot_contour(fourier_inv5, col = "blue", lwd = 3)
+plot_contour(fourier_inv10, col = "green", lwd = 3)
+plot_contour(fourier_inv20, col = "salmon", lwd = 3)
+
+coefs <- 
+  fourier |> 
+  efourier_norm() |> 
+  efourier_coefs()
+
+
+# ou utilizando a funçao analyze_objects()
+# Contornos
+res <- 
+  analyze_objects(pattern = "G", 
+                  dir_original = "area_foliar",
+                  marker = "id",
+                  watershed = FALSE,
+                  reference = TRUE,
+                  reference_area = 20,
+                  efourier = TRUE,
+                  nharm = 15,
+                  plot = FALSE)
+meas <- get_measures(res)
+dfpca <- 
+  meas$summary |> 
+  column_to_rownames("img")
+
+
+library(factoextra)
+library(FactoMineR)
+pcam <- PCA(dfpca)
+fviz_pca_ind(pcam)
+
+
+# Agrupamento hierárquico
+dist(dfpca) |> 
+  hclust() |> 
+  fviz_dend()
+```
+
+
