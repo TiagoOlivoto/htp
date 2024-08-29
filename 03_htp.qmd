@@ -33,6 +33,7 @@ res <-
 
 bm + shapefile_view(res$result_plot, attribute = "mean.NGRDI")
 bm + shapefile_view(res$result_plot, attribute = "coverage")
+
 ```
 
 
