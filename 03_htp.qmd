@@ -65,3 +65,7 @@ bm + shapefile_view(altplant, attribute = "volume")
 
 
 
+# Série temporal
+Campo de produção de milho da Corteva (Primavera do Leste-MT). 
+Imagens de satélite com resolução espacial de 3 m obtidas na plataforma  Planet Labs PBC  ©2024 (https://www.planet.com/), por meio do programa de Educação e Pesquisa (https://www.planet.com/industries/education-and-research/)
+
